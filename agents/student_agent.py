@@ -39,8 +39,12 @@ class StudentAgent(Agent):
     self.name = "StudentAgent"
     self.maxMoves = 0
 
-  def calculate_UCB(self, avg, n, N, c=1.414):
-    return avg + c * np.sqrt(np.log(N) / n)
+  def calculate_UCB(self, w, n, N, c=np.sqrt(2)):
+    if n == 0:
+      return np.inf
+
+    value = w/n + c * np.sqrt(np.log(N) / n)
+    return value
 
   def step(self, chess_board, player, opponent):
     """
@@ -59,75 +63,61 @@ class StudentAgent(Agent):
     Please check the sample implementation in agents/random_agent.py or agents/human_agent.py for more details.
     """
 
-    valid_moves = get_valid_moves(chess_board, player)
-    node_scores = np.full(len(valid_moves), np.inf)
-    print(node_scores)
-    w_l = []
-
-
-    # print("----------------- Checking Valid Moves -----------------")
-
     start_time = time.time()
-    
-    for move in valid_moves:
+    AVG_ITERATIONS = 3
+
+    total_iterations = 0
+    valid_moves = get_valid_moves(chess_board, player)
+    move_scores = {move: 0 for move in valid_moves}
+    move_counts = {move: 0 for move in valid_moves}
+    move_UCB = {move: self.calculate_UCB(move_scores[move], move_counts[move], total_iterations) for move in valid_moves}
+
+    while total_iterations < len(valid_moves) * AVG_ITERATIONS:
+      best_move = max(move_UCB, key=move_UCB.get)
       new_board = deepcopy(chess_board)
-      execute_move(new_board, move, player)
-      cur_player = opponent
-      iterations = 5
-      # print("Move: ", move)
-      final_scores = []
-
-      # print("------------ START ---------------")
-
-      for _ in range(iterations):
-        # print("-----------------Simulating Game-----------------")
-        iteration_board = deepcopy(new_board)
-        total_moves = 0
-        moves = 0
-        # print("-----------------End Simulating Game-----------------")
-        while True:
-          is_endgame, p0_score, p1_score = check_endgame(iteration_board, player, opponent)
-          if is_endgame:
-            final_scores.append((p0_score, p1_score, total_moves, 1 if p0_score > p1_score else 0))
-            break
-
-          # print(f"------------ {moves} ---------------")
-          move = random_move(iteration_board, cur_player)
-          if move is None:
-            break
-          execute_move(iteration_board, move, cur_player)
-
-          if cur_player == player:
-            cur_player = opponent
+      execute_move(new_board, best_move, player)
+      cur_user = opponent
+      potential_stalemate = False
+      while True:
+        is_endgame, p0_score, p1_score = check_endgame(new_board, player, opponent)
+        if is_endgame:
+          if move_scores[best_move] == np.inf:
+            move_scores[best_move] = 1 if p0_score > p1_score else 0
           else:
-            cur_player = player
+            move_scores[best_move] += 1 if p0_score > p1_score else 0
 
-          total_moves += 1
-          # print("Total Moves: ", total_moves)
-          moves += 1
-      
-      # print("Final Scores: ", final_scores)
-      score_sum = sum(t[-1] for t in final_scores)
-      print("Score Sum: ", score_sum)
-      w_l.append(score_sum / iterations)
+          move_counts[best_move] += 1
+          total_iterations += 1
+          move_UCB[best_move] = self.calculate_UCB(move_scores[best_move], move_counts[best_move], total_iterations)
+          break
 
-      # print("------------ END ---------------")
-      # print("")
-    # print("----------------- End Valid Moves -----------------")
-    print("")
+        move = random_move(new_board, cur_user)
+        if move is None:
+          print("       No valid moves")
+          if potential_stalemate:
+            if move_scores[best_move] == np.inf:
+              move_scores[best_move] = 0
 
-    print("Win Loss: ", w_l)
-    winner_index = w_l.index(max(w_l))
-    time_taken = time.time() - start_time
+            move_counts[best_move] += 1
+            total_iterations += 1
+            move_UCB[best_move] = self.calculate_UCB(move_scores[best_move], move_counts[best_move], total_iterations)
+            break
 
-    print("Time Taken: ", time_taken)
-    return valid_moves[winner_index]
-   
+          potential_stalemate = True
 
-    # print("My AI's turn took ", time_taken, "seconds.")
-    # print("MYINFO: ", get_valid_moves(chess_board, player))
+          if cur_user == player:
+            cur_user = opponent
+          else:
+            cur_user = player
+          continue
 
-    # Dummy return (you should replace this with your actual logic)
-    # Returning a random valid move as an example
-    # return random_move(chess_board,player)
+        execute_move(new_board, move, cur_user)
+
+        if cur_user == player:
+          cur_user = opponent
+        else:
+          cur_user = player
+
+    print("       Final Choice", max(move_UCB, key=move_UCB.get))
+    return max(move_UCB, key=move_UCB.get)
 
