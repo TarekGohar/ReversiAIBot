@@ -6,26 +6,15 @@ import numpy as np
 from copy import deepcopy
 import time
 from helpers import random_move, count_capture, execute_move, check_endgame, get_valid_moves
+import math
+import psutil
+import os
 
-"""
-Helpers.py is a collection of functions that primarily make up the Reversi/Othello game logic.
-Beyond a few things in the World init, which can be copy/pasted this should be almost
-all of what you'll need to simulate games in your search method.
 
-Functions:
-    get_directions    - a simple helper to deal with the geometry of Reversi moves
-    count_capture     - how many flips does this move make. Game logic defines valid moves as those with >0 returns from this function. 
-    count_capture_dir - a helper for the above, unlikely to be used externally
-    execute_move      - update the chess_board by simulating a move
-    flip_disks        - a helper for the above, unlikely to be used externally
-    check_endgame     - check for termination, who's won but also helpful to score non-terminated games
-    get_valid_moves   - use this to get the children in your tree
-    random_move       - basis of the random agent and can be used to simulate play
-
-    For all, the chess_board is an np array of integers, size nxn and integer values indicating square occupancies.
-    The current player is (1: Blue, 2: Brown), 0's in the board mean empty squares.
-    Move pos is a tuple holding [row,col], zero indexed such that valid entries are [0,board_size-1]
-"""
+def monitor_memory():
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    print(f"Memory Usage: {memory_info.rss / (1024 * 1024):.2f} MB")
 
 @register_agent("student_agent")
 class StudentAgent(Agent):
@@ -39,85 +28,203 @@ class StudentAgent(Agent):
     self.name = "StudentAgent"
     self.maxMoves = 0
 
-  def calculate_UCB(self, w, n, N, c=np.sqrt(2)):
-    if n == 0:
-      return np.inf
-
-    value = w/n + c * np.sqrt(np.log(N) / n)
-    return value
-
   def step(self, chess_board, player, opponent):
-    """
-    Implement the step function of your agent here.
-    You can use the following variables to access the chess board:
-    - chess_board: a numpy array of shape (board_size, board_size)
-      where 0 represents an empty spot, 1 represents Player 1's discs (Blue),
-      and 2 represents Player 2's discs (Brown).
-    - player: 1 if this agent is playing as Player 1 (Blue), or 2 if playing as Player 2 (Brown).
-    - opponent: 1 if the opponent is Player 1 (Blue), or 2 if the opponent is Player 2 (Brown).
+    node = MCTSNode(chess_board, player)
+    move = node.mcts_search(chess_board, player)
+    # Call periodically in your program
+    monitor_memory()
+    if move is None:
+        print("Player passes.")
+    else:
+        print(f"Player plays at position {move}.")
+    return move
+    
+# Monte Carlo Tree Search Node class    
+class MCTSNode:
+    def __init__(self, board_state, current_player, parent=None, move=None):
+        self.board_state = board_state # 2D numpy array representing the game
+        self.current_player = current_player # Integer representing the current player (1 for Player 1/Blue, 2 for Player 2/Brown)
+        self.parent = parent # Parent node
+        self.move = move # Move that led to this node
+        self.children = [] # List of child nodes
+        self.visits = 0 # Number of visits
+        self.wins = 0 # Number of wins
+        self.rave_visits = {} # Number of RAVE visits for each move
+        self.rave_wins = {} # Number of RAVE wins for each move
 
-    You should return a tuple (r,c), where (r,c) is the position where your agent
-    wants to place the next disc. Use functions in helpers to determine valid moves
-    and more helpful tools.
+    def evaluate_board(self, board, color, player_score, opponent_score):
+        """
+        Evaluate the board state based on multiple factors.
 
-    Please check the sample implementation in agents/random_agent.py or agents/human_agent.py for more details.
-    """
+        Parameters:
+        - board: 2D numpy array representing the game board.
+        - color: Integer representing the agent's color (1 for Player 1/Blue, 2 for Player 2/Brown).
+        - player_score: Score of the current player.
+        - opponent_score: Score of the opponent.
 
-    start_time = time.time()
-    AVG_ITERATIONS = 3
+        Returns:
+        - int: The evaluated score of the board.
+        """
+        # Corner positions are highly valuable
+        corners = [(0, 0), (0, board.shape[1] - 1), (board.shape[0] - 1, 0), (board.shape[0] - 1, board.shape[1] - 1)]
+        corner_score = sum(1 for corner in corners if board[corner] == color) * 10
+        corner_penalty = sum(1 for corner in corners if board[corner] == 3 - color) * -10
 
-    total_iterations = 0
-    valid_moves = get_valid_moves(chess_board, player)
-    move_scores = {move: 0 for move in valid_moves}
-    move_counts = {move: 0 for move in valid_moves}
-    move_UCB = {move: self.calculate_UCB(move_scores[move], move_counts[move], total_iterations) for move in valid_moves}
+        # Mobility: the number of moves the opponent can make
+        opponent_moves = len(get_valid_moves(board, 3 - color))
+        mobility_score = -opponent_moves
 
-    while total_iterations < len(valid_moves) * AVG_ITERATIONS:
-      best_move = max(move_UCB, key=move_UCB.get)
-      new_board = deepcopy(chess_board)
-      execute_move(new_board, best_move, player)
-      cur_user = opponent
-      potential_stalemate = False
-      while True:
-        is_endgame, p0_score, p1_score = check_endgame(new_board, player, opponent)
-        if is_endgame:
-          if move_scores[best_move] == np.inf:
-            move_scores[best_move] = 1 if p0_score > p1_score else 0
+        # Combine scores
+        total_score = player_score - opponent_score + corner_score + corner_penalty + mobility_score
+        return total_score
+
+    def mcts_search(self, root_state, player, time_limit=1.9):
+      start_time = time.time()
+      root_node = MCTSNode(root_state, player)
+      iteration = 0
+      while time.time() - start_time < time_limit:
+          iteration += 1
+        #   print("Iteration: ", iteration, "RAM: ", get_ram_usage())
+          node = root_node
+          # Selection
+          is_endgame, _, _ = check_endgame(node.board_state, player, player%2 +1)
+          while node.is_fully_expanded() and not is_endgame:
+              node = node.best_child()
+          # Expansion
+          if not is_endgame:
+              node.expand()
+              if len(node.children) > 0:
+                  node = node.children[np.random.randint(len(node.children))]
+              else:
+                  # No moves to expand, proceed to backpropagation
+                  winner = node.get_winner()
+                  moves_played = []
+                  node.backpropagate(winner, moves_played)
+                  continue
+          # Simulation
+          winner, moves_played = node.rollout()
+          # Backpropagation
+          node.backpropagate(winner, moves_played)
+      # Return the move with the most visits
+      if root_node.children:
+          best_move = max(root_node.children, key=lambda c: c.visits).move
+      else:
+          # If no children were expanded, return a random valid move
+          valid_moves = get_valid_moves(root_state, player)
+          if valid_moves:
+              best_move = random.choice(valid_moves)
           else:
-            move_scores[best_move] += 1 if p0_score > p1_score else 0
+              best_move = None  # No valid moves, must pass
+      return best_move
 
-          move_counts[best_move] += 1
-          total_iterations += 1
-          move_UCB[best_move] = self.calculate_UCB(move_scores[best_move], move_counts[best_move], total_iterations)
-          break
 
-        move = random_move(new_board, cur_user)
-        if move is None:
-          print("       No valid moves")
-          if potential_stalemate:
-            if move_scores[best_move] == np.inf:
-              move_scores[best_move] = 0
+    def expand(self):
+      if not self.children:
+          moves = get_valid_moves(self.board_state, self.current_player)
+          if not moves:
+              # No valid moves, so the player must pass
+              moves = [None]  # Represent pass move with None
+          for move in moves:
+              new_board = deepcopy(self.board_state)
+              if move is not None:
+                  execute_move(new_board, move, self.current_player)
+              # Switch to the next player
+              next_player = self.current_player % 2 + 1
+              child_node = MCTSNode(new_board, next_player, parent=self, move=move)
+              self.children.append(child_node)
 
-            move_counts[best_move] += 1
-            total_iterations += 1
-            move_UCB[best_move] = self.calculate_UCB(move_scores[best_move], move_counts[best_move], total_iterations)
-            break
 
-          potential_stalemate = True
+    def is_fully_expanded(self):
+        return len(self.children) > 0
 
-          if cur_user == player:
-            cur_user = opponent
+    def best_child(self, exploration=1.52):
+      best_score = -np.inf
+      best_child = None
+      for child in self.children:
+          if child.visits == 0:
+              return child
+          rave_visit = child.rave_visits.get(child.move, 0)
+          beta = rave_visit / (rave_visit + child.visits + 1e-4)
+          q_value = child.wins / child.visits
+          rave_win = child.rave_wins.get(child.move, 0)
+          rave_q = rave_win / rave_visit if rave_visit > 0 else 0
+          uct_value = (1 - beta) * q_value + beta * rave_q + exploration * math.sqrt(math.log(self.visits) / child.visits)
+          if uct_value > best_score:
+              best_score = uct_value
+              best_child = child
+      return best_child
+
+
+    def rollout_policy(self, board_state, player):
+      if self.current_player == player:
+          return random_move(board_state, player)
+      else:
+        legal_moves = get_valid_moves(board_state, player)
+
+        if not legal_moves:
+            return None  # No valid moves available, pass turn
+
+        # Advanced heuristic: prioritize corners and maximize flips while minimizing opponent's potential moves
+        best_move = None
+        best_score = float('-inf')
+
+        for move in legal_moves:
+            simulated_board = deepcopy(board_state)
+            execute_move(simulated_board, move, player)
+            _, player_score, opponent_score = check_endgame(simulated_board, player, 3 - player)
+            move_score = self.evaluate_board(simulated_board, player, player_score, opponent_score)
+
+            if move_score > best_score:
+                best_score = move_score
+                best_move = move
+
+        # Return the best move found
+        return best_move if best_move else random.choice(legal_moves)
+
+    def rollout(self):
+      current_state = deepcopy(self.board_state)
+      moves_played = []
+      player = self.current_player
+      opponent = self.current_player % 2 + 1
+
+      is_endgame, p0_score, p1_score = check_endgame(current_state, player, opponent)
+      consecutive_passes = 0  # Counter for consecutive passes
+
+      while not is_endgame:
+          move = self.rollout_policy(current_state, player)
+          moves_played.append((player, move))
+
+          if move is not None:
+              execute_move(current_state, move, player)
+              consecutive_passes = 0  # Reset pass counter
           else:
-            cur_user = player
-          continue
+              consecutive_passes += 1
 
-        execute_move(new_board, move, cur_user)
+          # Check for endgame condition: two consecutive passes
+          if consecutive_passes >= 2:
+              break  # End the game
 
-        if cur_user == player:
-          cur_user = opponent
-        else:
-          cur_user = player
+          # Swap players
+          player, opponent = opponent, player
+          is_endgame, p0_score, p1_score = check_endgame(current_state, player, opponent)
 
-    print("       Final Choice", max(move_UCB, key=move_UCB.get))
-    return max(move_UCB, key=move_UCB.get)
+      # Determine the winner
+      winner = 1 if p0_score > p1_score else 2
+      return winner, moves_played
 
+
+    def backpropagate(self, winner, moves_played):
+      node = self
+      while node is not None:
+          node.visits += 1
+          # The player who made the move leading to this node is the opponent of node.current_player
+          player_who_moved = 1 if node.current_player == 2 else 2
+          if player_who_moved == winner:
+              node.wins += 1
+          # Update RAVE statistics
+          for player, move in moves_played:
+              if move is not None:
+                  node.rave_visits[move] = node.rave_visits.get(move, 0) + 1
+                  if player == player_who_moved and player == winner:
+                      node.rave_wins[move] = node.rave_wins.get(move, 0) + 1
+          node = node.parent
