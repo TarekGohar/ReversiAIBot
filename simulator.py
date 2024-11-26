@@ -104,6 +104,8 @@ class Simulator:
         self.args.display = False
         with all_logging_disabled():
             for i in range(self.args.autoplay_runs):
+                print(f"Running autoplay run {i+1}/{self.args.autoplay_runs}")
+                print("Player 1: ", p1_win_count, "| Player 2: ", p2_win_count)
                 swap_players = i % 2 == 0
                 board_size = self.valid_board_sizes[ np.random.randint(len(self.valid_board_sizes)) ] 
                 p0_score, p1_score, p0_time, p1_time = self.run(
