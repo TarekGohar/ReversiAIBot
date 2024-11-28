@@ -84,6 +84,7 @@ class Simulator:
     def run(self, swap_players=False, board_size=None):
         self.reset(swap_players=swap_players, board_size=board_size)
         is_end, p0_score, p1_score = self.world.step()
+        print("Board Size: ", board_size)
         while not is_end:
             is_end, p0_score, p1_score = self.world.step()
         logger.info(
