@@ -191,7 +191,7 @@ def evaluate_board_state(board_state, player):
         initial_board_state (np.ndarray, optional): The initial board state for comparison.
         
     Returns:
-        tuple: (player_score, opponent_score)
+        tuple: (player_score, opponent_score, is_endgame)
     """
     rows, cols = board_state.shape
 
@@ -226,7 +226,7 @@ def evaluate_board_state(board_state, player):
             if (row, col) in corners:
                 score += 10000
             elif (row, col) in edges:
-                score += 175
+                score += 125
             else:
                 score += 10
 
@@ -290,7 +290,7 @@ class MCTSNode:
         self.best_child_cache = None
         self.best_score_cache = None
 
-    def mcts_search(self, player, start_time, time_limit=1.975):
+    def mcts_search(self, player, start_time, time_limit=1.99):
         """
         Run the MCTS/RAVE search algorithm to select the best move.
         This function performs a Monte Carlo Tree Search (MCTS) with Rapid Action Value Estimation (RAVE) to determine the optimal move for the given player from the root state. It prioritizes corner moves if available and iteratively expands the search tree within the given time limit.
@@ -399,11 +399,11 @@ class MCTSNode:
             return None
 
         # Define board corners and edges
-        corners = get_board_corners(board_state)
+        # corners = get_board_corners(board_state)
 
-        for corner in corners:
-            if corner in valid_moves:
-                return corner
+        # for corner in corners:
+        #     if corner in valid_moves:
+        #         return corner
 
         return valid_moves[np.random.randint(len(valid_moves))]
 
@@ -435,7 +435,7 @@ class MCTSNode:
             player, opponent = opponent, player
 
         # Approximate winner based on current board state
-        p0_score_start, p1_score_start = evaluate_board_state(self.board_state, player)
+        p0_score_start, p1_score_start, _ = evaluate_board_state(self.board_state, player)
         p0_score, p1_score, is_endgame = evaluate_board_state(current_state, player)
         
         winner = 0
@@ -443,13 +443,20 @@ class MCTSNode:
         if is_endgame:
             if p0_score > p1_score:
                 winner = player
-            else:
+            elif p1_score > p0_score:
                 winner = 3 - player
+            else:
+                winner = 0
         else:
-            if p0_score > p1_score and (p0_score - p0_score_start) >= rollout_depth * 10:
+            p0_change = p0_score - p0_score_start
+            p1_change = p1_score - p1_score_start
+            # if p0_score > p1_score and (p0_change) >= rollout_depth * 10 and (p1_score - p1_score_start) <= p0_change:
+            if p0_score > p1_score and (p0_change) >= rollout_depth * 5 and abs(p1_change) <= rollout_depth * 30:
                 winner = player
-            else:
+            elif p1_score > p0_score and (p1_change) >= rollout_depth * 5 and abs(p0_change) <= rollout_depth * 30:
                 winner = 3 - player
+            else:
+                winner = 0
 
         return winner, moves_played
 
@@ -489,7 +496,7 @@ class MCTSNode:
         return len(self.children) > 0
 
     # Select the best child node based on the UCT/RAVE formula
-    def best_child(self, exploration=np.sqrt(2), k=800):
+    def best_child(self, exploration=np.sqrt(2), k=500):
         best_score = -np.inf
         best_child = None
 
