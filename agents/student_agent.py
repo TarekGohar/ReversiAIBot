@@ -10,13 +10,12 @@ import math
 import psutil
 import os
 
-
 # Prints current memory usage of the program
 def monitor_memory():
     process = psutil.Process(os.getpid())
     memory_info = process.memory_info()
     memory_mb = memory_info.rss / (1024 * 1024)
-    # print(f"Memory Usage: {memory_info.rss / (1024 * 1024):.2f} MB")
+    print(f"Memory Usage: {memory_info.rss / (1024 * 1024):.2f} MB")
         
 # Get the corners of the game board
 def get_board_corners(board):
@@ -46,39 +45,6 @@ def beta(visits, k=200):
 
 
 # Helper functions
-
-def count_edge_occupancy(board_state, player):
-    """
-    Counts the number of edges occupied by the given player and their opponent.
-    
-    Args:
-        board_state (np.ndarray): 2D grid representing the game board.
-        player (int): The player for whom the edge occupancy is being calculated (1 or 2).
-        
-    Returns:
-        tuple: (player_edges, opponent_edges)
-            player_edges (int): Number of edges occupied by the player.
-            opponent_edges (int): Number of edges occupied by the opponent.
-    """
-    opponent = 3 - player  # Determine the opponent player
-    player_edges = 0
-    opponent_edges = 0
-
-    rows, cols = board_state.shape
-
-    # Define edge cells: top row, bottom row, left column, right column
-    top_row = board_state[0, :]
-    bottom_row = board_state[rows - 1, :]
-    left_column = board_state[:, 0]
-    right_column = board_state[:, cols - 1]
-
-    # Count player and opponent pieces on the edges
-    for edge in [top_row, bottom_row, left_column, right_column]:
-        player_edges += np.sum(edge == player)
-        opponent_edges += np.sum(edge == opponent)
-
-    return player_edges, opponent_edges
-
 def is_stable(board, row, col):
     """
     Check if the piece at (row, col) is stable in a Reversi game.
@@ -204,14 +170,11 @@ def evaluate_board_state(board_state, player):
     player_score = 0
     opponent_score = 0
 
-    # Count remaining tiles
-    empty_spots = count_zeros(board_state)
-
     # Endgame evaluation
     # if empty_spots < 10:
     is_endgame, p0_score, p1_score = check_endgame(board_state, player, 3 - player)
     if is_endgame:
-        return (1, 0, True) if p0_score > p1_score else (0, 1, True)
+        return (1, 0, p0_score, p1_score, True) if p0_score > p1_score else (0, 1, p0_score, p1_score, True)
 
     # Edge and corner considerations
     for row in range(rows):
@@ -226,17 +189,17 @@ def evaluate_board_state(board_state, player):
             if (row, col) in corners:
                 score += 10000
             elif (row, col) in edges:
-                score += 125
+                score += 9000
             else:
                 score += 10
 
 
             # Exposed discs
-            if is_stable(board_state, row, col):
-                score += 5
+            # if is_stable(board_state, row, col):
+            #     score += 5
 
-            if is_at_risk(board_state, row, col):
-                score -= 12
+            # if is_at_risk(board_state, row, col):
+            #     score -= 5
 
 
 
@@ -246,7 +209,7 @@ def evaluate_board_state(board_state, player):
             else:
                 opponent_score += score
 
-    return player_score, opponent_score, False
+    return player_score, opponent_score, p0_score, p1_score, False
 
 @register_agent("student_agent")
 class StudentAgent(Agent):
@@ -307,6 +270,12 @@ class MCTSNode:
         edges = get_board_edges(self.board_state)
         moves = get_valid_moves(self.board_state, player)
 
+        # moves.sort(key=lambda move: (
+        #         0 if move in corners else  # Highest priority for corners
+        #         1 if move in edges else    # Second priority for edges
+        #         2                          # Lowest priority for others
+        #     ))
+
         # If corner move available, play it
         # for move in moves:
         #     if move in corners:
@@ -333,7 +302,7 @@ class MCTSNode:
                 node.expand(corners, edges)
                 if node.children:
                     # Select a random child node to explore
-                    node = node.children[0]
+                    node = np.random.choice(node.children)
 
             # Simulation: Simulate a game from the current node to determine the winner
             winner, moves_played = node.rollout()
@@ -355,7 +324,7 @@ class MCTSNode:
                     best_move = child.move
 
 
-            best_move =  max(self.children, key=lambda c: c.visits).move
+            # best_move =  max(self.children, key=lambda c: c.visits).move
         else:
             # If no children were expanded, return a random valid move
             if moves:
@@ -373,11 +342,11 @@ class MCTSNode:
             moves = get_valid_moves(self.board_state, self.current_player)
 
             # Prioritize moves: corners > edges > others
-            moves.sort(key=lambda move: (
-                0 if move in corners else  # Highest priority for corners
-                1 if move in edges else    # Second priority for edges
-                2                          # Lowest priority for others
-            ))
+            # moves.sort(key=lambda move: (
+            #     0 if move in corners else  # Highest priority for corners
+            #     1 if move in edges else    # Second priority for edges
+            #     2                          # Lowest priority for others
+            # ))
 
             for move in moves:
                 new_board = deepcopy(self.board_state)
@@ -411,72 +380,67 @@ class MCTSNode:
         """
         Perform a rollout simulation from the current state, dynamically adjusting the depth
         based on the number of empty spaces on the board.
-        Args:
-            max_rollout_depth (int): The initial maximum depth of the rollout.
         Returns:
             winner (int): The winner determined by the simulation.
             moves_played (list): List of moves played during the rollout.
+            steps (int): Number of steps taken to reach the outcome.
         """
         current_state = deepcopy(self.board_state)
         moves_played = []
         player = self.current_player
         opponent = 3 - self.current_player
-        rollout_depth = 6  # Minimum depth at the start of the game
 
+        # Determine rollout depth dynamically based on empty tiles
+        rollout_depth = 3  # Scale with empty tiles
+
+        steps = 0  # Track number of steps in the rollout
+
+        # Simulate game
         for _ in range(rollout_depth):
             move = self.rollout_policy(current_state, player)
-            if move is None:
-                break  # No valid moves, game may be over
+            if move is None:  # No valid moves, game may be over
+                break
             moves_played.append((player, move))
             execute_move(current_state, move, player)
+
+            # Check if the game has ended
             is_endgame, _, _ = check_endgame(current_state, player, opponent)
             if is_endgame:
                 break
+            # Swap turns
             player, opponent = opponent, player
 
-        # Approximate winner based on current board state
-        p0_score_start, p1_score_start, _ = evaluate_board_state(self.board_state, player)
-        p0_score, p1_score, is_endgame = evaluate_board_state(current_state, player)
-        
-        winner = 0
+        # Evaluate board states for comparison
+        # p0_score_start, p1_score_start, p0_tiles_start, p1_tiles_start, _ = evaluate_board_state(self.board_state, self.current_player)
+        p0_score, p1_score, p0_tiles, p1_tiles, is_endgame = evaluate_board_state(current_state, player)
 
-        if is_endgame:
-            if p0_score > p1_score:
-                winner = player
-            elif p1_score > p0_score:
-                winner = 3 - player
-            else:
-                winner = 0
-        else:
-            p0_change = p0_score - p0_score_start
-            p1_change = p1_score - p1_score_start
-            # if p0_score > p1_score and (p0_change) >= rollout_depth * 10 and (p1_score - p1_score_start) <= p0_change:
-            if p0_score > p1_score and (p0_change) >= rollout_depth * 5 and abs(p1_change) <= rollout_depth * 30:
-                winner = player
-            elif p1_score > p0_score and (p1_change) >= rollout_depth * 5 and abs(p0_change) <= rollout_depth * 30:
-                winner = 3 - player
-            else:
-                winner = 0
+        # Determine winner based on current state
+        winner = 0
+        if p0_score > p1_score and p0_tiles > p1_tiles:
+            winner = self.current_player
+        elif p1_score > p0_score and p1_tiles > p0_tiles:
+            winner = 3 - self.current_player
 
         return winner, moves_played
+
 
     # Backpropagate the results of the simulation
     def backpropagate(self, winner, moves_played):
         """
-        Backpropagate the results of the simulation up the tree.
+        Backpropagate the results of the simulation up the tree, incorporating the number of steps.
         Args:
             winner (int): The player who won the simulation (1 or 2).
             moves_played (list): List of (player, move) pairs played during the simulation.
+            steps (int): Number of steps taken to reach the outcome.
         """
         node = self
         while node is not None:
             # Increment visits
             node.visits += 1
-            
-            # Determine if this node's action resulted in a win
             if node.parent is not None:  # Skip the root node
                 player_who_moved = 3 - node.current_player  # Parent's perspective
                 if player_who_moved == winner:
+                    # Weight wins by the inverse of the number of steps (fewer steps = higher reward)
                     node.wins += 1
 
             # Update RAVE statistics
@@ -491,18 +455,30 @@ class MCTSNode:
             node.best_score_cache = None
             node = node.parent
 
+
     # Check if the node has children
     def has_children(self):
         return len(self.children) > 0
 
     # Select the best child node based on the UCT/RAVE formula
-    def best_child(self, exploration=np.sqrt(2), k=500):
+    def best_child(self, exploration=np.sqrt(2), k=1):
+
         best_score = -np.inf
         best_child = None
+
+        if self.best_child_cache:
+            return self.best_child_cache
 
         for child in self.children:
             if child.visits == 0:
                 return child  # Prioritize unexplored nodes
+
+            child_score_cache = child.best_score_cache 
+
+            if child_score_cache and child_score_cache > best_score:
+                best_score = child_score_cache
+                best_child = child
+                continue
 
             # Calculate beta using the RAVE formula
             beta_value = beta(self.visits, k)
