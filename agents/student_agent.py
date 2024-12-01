@@ -10,13 +10,8 @@ import math
 import psutil
 import os
 
-# Prints current memory usage of the program
-def monitor_memory():
-    process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
-    memory_mb = memory_info.rss / (1024 * 1024)
-    print(f"Memory Usage: {memory_info.rss / (1024 * 1024):.2f} MB")
-        
+STEP_TIME_LIMIT = 1.99
+
 # Get the corners of the game board
 def get_board_corners(board):
     return [(0, 0), (0, board.shape[1] - 1), (board.shape[0] - 1, 0), (board.shape[0] - 1, board.shape[1] - 1)]
@@ -28,23 +23,12 @@ def get_board_edges(board):
                 [(i, 0) for i in range(1, board.shape[0] - 1)] + \
                 [(i, board.shape[1] - 1) for i in range(1, board.shape[0] - 1)]
 
-# Get zeroes in board
-def count_zeros(board):
-    return np.count_nonzero(board == 0)
+def monitor_memory():
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    memory_mb = memory_info.rss / (1024 * 1024)
+    print(f"Memory Usage: {memory_info.rss / (1024 * 1024):.2f} MB")
 
-def beta(visits, k=200):
-    """
-    Calculate the beta value for a given state.
-    Args:
-        visits (int): Total number of visits to the state (N(s)).
-        k (float): Equivalence parameter for RAVE. Default is 1e-5.
-    Returns:
-        float: Beta value, balancing RAVE and MC values.
-    """
-    return math.sqrt(k / (3 * visits + k)) if visits > 0 else 1
-
-
-# Helper functions
 def is_stable(board, row, col):
     """
     Check if the piece at (row, col) is stable in a Reversi game.
@@ -147,7 +131,23 @@ def is_at_risk(board, row, col):
 
     return False
 
-def evaluate_board_state(board_state, player):
+def greedy_flips_score(board, move, player):
+    """
+    Compute a score based on the number of discs flipped by the move.
+    """
+    return count_capture(board, move, player)  # Assuming `count_capture` exists
+
+def is_adjacent_to_corner(move, board):
+    """
+    Check if a move is adjacent to a corner.
+    """
+    corners = get_board_corners(board)
+    for corner in corners:
+        if abs(corner[0] - move[0]) <= 1 and abs(corner[1] - move[1]) <= 1:
+            return True
+    return False
+
+def evaluate_board(board_state):
     """
     Evaluate the board state relative to an initial board state for better decision-making.
     
@@ -161,20 +161,19 @@ def evaluate_board_state(board_state, player):
     """
     rows, cols = board_state.shape
 
+    # Endgame evaluation
+    is_endgame, p0_score, p1_score = check_endgame(board_state, 1, 2)
+    if is_endgame:
+        return np.inf if p0_score > p1_score else -np.inf
+
     # Define important spots
     corners = get_board_corners(board_state)
     edges = get_board_edges(board_state)
     edges = list(set(edges) - set(corners))  # Remove corners from edges
 
     # Initialize scores
-    player_score = 0
-    opponent_score = 0
-
-    # Endgame evaluation
-    # if empty_spots < 10:
-    is_endgame, p0_score, p1_score = check_endgame(board_state, player, 3 - player)
-    if is_endgame:
-        return (1, 0, p0_score, p1_score, True) if p0_score > p1_score else (0, 1, p0_score, p1_score, True)
+    max_score = 0
+    min_score = 0
 
     # Edge and corner considerations
     for row in range(rows):
@@ -189,27 +188,169 @@ def evaluate_board_state(board_state, player):
             if (row, col) in corners:
                 score += 10000
             elif (row, col) in edges:
-                score += 9000
+                score += 200
             else:
                 score += 10
 
 
             # Exposed discs
-            # if is_stable(board_state, row, col):
-            #     score += 5
+            if is_stable(board_state, row, col):
+                score += 7
 
-            # if is_at_risk(board_state, row, col):
-            #     score -= 5
+            if is_at_risk(board_state, row, col):
+                score -= 5
 
 
 
             # Add score to the appropriate player
-            if current_player == player:
-                player_score += score
+            if current_player == 1:
+                max_score += score
             else:
-                opponent_score += score
+                min_score += score
 
-    return player_score, opponent_score, p0_score, p1_score, False
+    return max_score - min_score
+
+
+
+class Node:
+    def __init__(self, key, value, size):
+        self.key = key
+        self.value = value
+        self.size = size
+        self.prev = None
+        self.next = None
+
+
+class MemoryLimitedLRUCache:
+    def __init__(self, memory_limit_mb):
+        """
+        Initialize the cache with a memory limit specified in megabytes (MB).
+        
+        Args:
+            memory_limit_mb (int): Maximum memory in megabytes for the cache.
+        """
+        self.memory_limit = memory_limit_mb * 1024 * 1024  # Convert MB to bytes
+        self.current_memory = 0
+        self.cache = {}
+        self.head = Node(0, 0, 0)  # Dummy head
+        self.tail = Node(0, 0, 0)  # Dummy tail
+        self.head.next = self.tail
+        self.tail.prev = self.head
+
+    def _remove(self, node):
+        """
+        Remove a node from the doubly linked list.
+        """
+        prev_node = node.prev
+        next_node = node.next
+        prev_node.next = next_node
+        next_node.prev = prev_node
+
+    def _add_to_head(self, node):
+        """
+        Add a node right after the dummy head.
+        """
+        next_node = self.head.next
+        self.head.next = node
+        node.prev = self.head
+        node.next = next_node
+        next_node.prev = node
+
+    def _get_size(self, key, value):
+        """
+        Estimate the memory usage of a key-value pair.
+        
+        Args:
+            key: The key object.
+            value: The value object.
+        
+        Returns:
+            int: The estimated size in bytes.
+        """
+        key_size = sys.getsizeof(key)
+        if isinstance(key, np.ndarray):
+            key_size += key.nbytes
+        value_size = sys.getsizeof(value)
+        if isinstance(value, np.ndarray):
+            value_size += value.nbytes
+        return key_size + value_size
+
+    def _evict(self):
+        """
+        Evict the least recently used item to free up memory.
+        """
+        while self.current_memory > self.memory_limit:
+            lru_node = self.tail.prev
+            if lru_node == self.head:
+                break  # No items left to evict
+            print(f"Evicting key: {lru_node.key}, size: {lru_node.size} bytes")
+            self._remove(lru_node)
+            del self.cache[lru_node.key]
+            self.current_memory -= lru_node.size
+
+    def get(self, key):
+        """
+        Retrieve a value from the cache.
+        
+        Args:
+            key: The key to retrieve.
+        
+        Returns:
+            The value associated with the key, or -1 if not found.
+        """
+        hashed_key = key.tobytes() if isinstance(key, np.ndarray) else key
+        if hashed_key in self.cache:
+            node = self.cache[hashed_key]
+            # Move the accessed node to the head (most recently used)
+            self._remove(node)
+            self._add_to_head(node)
+            return node.value
+        return None
+
+    def put(self, key, value):
+        """
+        Add a key-value pair to the cache.
+        
+        Args:
+            key: The key of the item.
+            value: The value of the item.
+        """
+        hashed_key = key.tobytes() if isinstance(key, np.ndarray) else key
+        size = self._get_size(key, value)
+
+        if hashed_key in self.cache:
+            node = self.cache[hashed_key]
+            # Update the value and move to the head
+            self.current_memory -= node.size
+            node.value = value
+            node.size = size
+            self.current_memory += size
+            self._remove(node)
+            self._add_to_head(node)
+        else:
+            # Add a new node
+            new_node = Node(hashed_key, value, size)
+            self.cache[hashed_key] = new_node
+            self._add_to_head(new_node)
+            self.current_memory += size
+
+        # Evict items if over memory limit
+        self._evict()
+
+    def display(self):
+        """
+        Display the current state of the cache.
+        """
+        node = self.head.next
+        items = []
+        while node != self.tail:
+            items.append((node.key, node.value, node.size))
+            node = node.next
+        print(f"Cache (Total Memory: {self.current_memory / (1024 * 1024):.2f}/{self.memory_limit / (1024 * 1024):.2f} MB):", items)
+
+
+
+
 
 @register_agent("student_agent")
 class StudentAgent(Agent):
@@ -221,286 +362,107 @@ class StudentAgent(Agent):
   def __init__(self):
     super(StudentAgent, self).__init__()
     self.name = "StudentAgent"
+    self.cache = MemoryLimitedLRUCache(memory_limit_mb=450)
+    self.largest_moves = 0
+
 
   def step(self, chess_board, player, opponent):
     # Start clock
     start_time = time.time()
 
-    # Create the root node
-    root_node = MCTSNode(chess_board, player)
+    depth = 2
+    best_move = None
 
-    # Run MCTS/RAVE search
-    move = root_node.mcts_search(player, start_time)
+    #  Iterative Deepening
+    while time.time() - start_time < STEP_TIME_LIMIT and depth <= 100:
+            try:
+                _, move = minimax_alpha_beta(
+                    chess_board, depth, -np.inf, np.inf, player, start_time, self.cache
+                )
+                if move:
+                    best_move = move  # Update best move if valid
+                print(best_move)
+                depth += 1
+            except Exception as e:
+                print(f"Error at depth {depth}: {e}")
+                break
+
+        
 
     # Check memory usage
     monitor_memory()
-
-    return move
-
-# Monte Carlo Tree Search Node class    
-class MCTSNode:
-    def __init__(self, board_state, current_player, parent=None, move=None):
-        self.board_state = board_state # 2D numpy array representing the game
-        self.current_player = current_player # Integer representing the current player (1 for Player 1/Blue, 2 for Player 2/Brown)
-        self.parent = parent # Parent node
-        self.move = move # Move that led to this node
-        self.children = [] # List of child nodes
-        self.visits = 0 # Number of visits
-        self.wins = 0 # Number of wins
-        self.rave_visits = {} # Number of RAVE visits for each move
-        self.rave_wins = {} # Number of RAVE wins for each move
-
-        self.best_child_cache = None
-        self.best_score_cache = None
-
-    def mcts_search(self, player, start_time, time_limit=1.99):
-        """
-        Run the MCTS/RAVE search algorithm to select the best move.
-        This function performs a Monte Carlo Tree Search (MCTS) with Rapid Action Value Estimation (RAVE) to determine the optimal move for the given player from the root state. It prioritizes corner moves if available and iteratively expands the search tree within the given time limit.
-        Args:
-            root_state (np.ndarray): The current state of the game board.
-            player (int): The player for whom the move is being selected.
-            start_time (float): The start time of the search process.
-            time_limit (float, optional): The maximum time allowed for the search in seconds. Default is 1.9 seconds.
-        Returns:
-            tuple: The best move determined by the MCTS/RAVE algorithm, or a random valid move if no children were expanded, or None if no valid moves are available.
-        """
-
-        corners = get_board_corners(self.board_state)
-        edges = get_board_edges(self.board_state)
-        moves = get_valid_moves(self.board_state, player)
-
-        # moves.sort(key=lambda move: (
-        #         0 if move in corners else  # Highest priority for corners
-        #         1 if move in edges else    # Second priority for edges
-        #         2                          # Lowest priority for others
-        #     ))
-
-        # If corner move available, play it
-        # for move in moves:
-        #     if move in corners:
-        #         return move
-
-        depth_sum = 0
-        iterations = 0
-        while (time.time() - start_time) < time_limit:
-            node = self
-            is_endgame, _, _ = check_endgame(node.board_state, player, 3 - player)
-            # print("iteration", iterations)
-
-            # Selection: Select the best child node until a leaf node is reached
-            depth = 0
-            while node.has_children() and not is_endgame:
-                node = node.best_child()
-                depth += 1
-            
-            depth_sum += depth
-            iterations += 1
-
-            # Expansion: Expand the tree by adding a new child node if the current node is not a terminal state
-            if not is_endgame:
-                node.expand(corners, edges)
-                if node.children:
-                    # Select a random child node to explore
-                    node = np.random.choice(node.children)
-
-            # Simulation: Simulate a game from the current node to determine the winner
-            winner, moves_played = node.rollout()
-
-            # Backpropagation
-            node.backpropagate(winner, moves_played)
-
-        print(depth_sum / iterations)
-        print(depth_sum)
-        print(iterations)
-        # Return the move with the most promising child
-        if self.children:
-            best_move = None
-            max_node = -np.inf
-            for child in self.children:
-                print(child.move, child.wins, child.visits)
-                if child.visits > max_node:
-                    max_node = child.visits
-                    best_move = child.move
-
-
-            # best_move =  max(self.children, key=lambda c: c.visits).move
-        else:
-            # If no children were expanded, return a random valid move
-            if moves:
-                best_move = moves[np.random.randint(len(moves))]
-            else:
-                best_move = None  # No valid moves, must pass
-
-        # input()
-        return best_move
     
-    # Expand the node by adding child nodes for each valid move
-    def expand(self, corners, edges):
-        if not self.children:
-            next_player = 3 - self.current_player
-            moves = get_valid_moves(self.board_state, self.current_player)
+    print(depth)
+    if best_move == None:
+        input()
+    return best_move
 
-            # Prioritize moves: corners > edges > others
-            # moves.sort(key=lambda move: (
-            #     0 if move in corners else  # Highest priority for corners
-            #     1 if move in edges else    # Second priority for edges
-            #     2                          # Lowest priority for others
-            # ))
+def minimax_alpha_beta(board, depth, alpha, beta, player, start_time, cache):
+    valid_moves = get_valid_moves(board, player)
+    corners = get_board_corners(board)
+    edges = get_board_edges(board)
 
-            for move in moves:
-                new_board = deepcopy(self.board_state)
-                execute_move(new_board, move, self.current_player)
-                child_node = MCTSNode(new_board, next_player, parent=self, move=move)
-                self.children.append(child_node)
-
-        # Invalidate cached best child
-        self.best_child_cache = None
-        self.best_score_cache = None
+    valid_moves.sort(key=lambda move: (
+                    0 if move in corners else
+                    1 if move in edges else
+                    2 -
+                    0.5 * greedy_flips_score(board, move, player) -
+                    0.2 * 1 if is_adjacent_to_corner(move, board) else 0
+                ))
 
 
+    # Base case
+    if depth == 0 or not valid_moves or time.time() - start_time >= STEP_TIME_LIMIT:
+        cached_score = cache.get(board)
 
-    def rollout_policy(self, board_state, player):
-        valid_moves = get_valid_moves(board_state, player)
+        if cached_score:
+            # print("Used cache with value ", cached_score)
+            return cached_score, None
+        
 
-        # If no valid moves, pass
-        if not valid_moves:
-            return None
+        score = evaluate_board(board)
+        cache.put(board.tobytes(), score)
 
-        # Define board corners and edges
-        # corners = get_board_corners(board_state)
+        return score, None
 
-        # for corner in corners:
-        #     if corner in valid_moves:
-        #         return corner
+    best_move = None
 
-        return valid_moves[np.random.randint(len(valid_moves))]
+    if player == 1:  # Maximizing player
+        max_eval = -np.inf
+        for move in valid_moves:
+            inner_board = deepcopy(board)
+            execute_move(inner_board, move, player)
 
-    def rollout(self):
-        """
-        Perform a rollout simulation from the current state, dynamically adjusting the depth
-        based on the number of empty spaces on the board.
-        Returns:
-            winner (int): The winner determined by the simulation.
-            moves_played (list): List of moves played during the rollout.
-            steps (int): Number of steps taken to reach the outcome.
-        """
-        current_state = deepcopy(self.board_state)
-        moves_played = []
-        player = self.current_player
-        opponent = 3 - self.current_player
+            # Recursive call
+            inner_board_eval, _ = minimax_alpha_beta(
+                inner_board, depth - 1, alpha, beta, 3 - player, start_time, cache
+            )
 
-        # Determine rollout depth dynamically based on empty tiles
-        rollout_depth = 3  # Scale with empty tiles
-
-        steps = 0  # Track number of steps in the rollout
-
-        # Simulate game
-        for _ in range(rollout_depth):
-            move = self.rollout_policy(current_state, player)
-            if move is None:  # No valid moves, game may be over
+            if inner_board_eval > max_eval:
+                max_eval = inner_board_eval
+                best_move = move
+            alpha = max(alpha, inner_board_eval)
+            if beta <= alpha:
+                # print(f"Pruning at move {move}, depth={depth}")
                 break
-            moves_played.append((player, move))
-            execute_move(current_state, move, player)
+        return max_eval, best_move
 
-            # Check if the game has ended
-            is_endgame, _, _ = check_endgame(current_state, player, opponent)
-            if is_endgame:
+    else:  # Minimizing player
+        min_eval = np.inf
+        for move in valid_moves:
+            inner_board = deepcopy(board)
+            execute_move(inner_board, move, player)
+
+            # Recursive call
+            inner_board_eval, _ = minimax_alpha_beta(
+                inner_board, depth - 1, alpha, beta, 3 - player, start_time, cache
+            )
+
+            if inner_board_eval < min_eval:
+                min_eval = inner_board_eval
+                best_move = move
+            beta = min(beta, inner_board_eval)
+            if beta <= alpha:
+                # print(f"Pruning at move {move}, depth={depth}")
                 break
-            # Swap turns
-            player, opponent = opponent, player
-
-        # Evaluate board states for comparison
-        # p0_score_start, p1_score_start, p0_tiles_start, p1_tiles_start, _ = evaluate_board_state(self.board_state, self.current_player)
-        p0_score, p1_score, p0_tiles, p1_tiles, is_endgame = evaluate_board_state(current_state, player)
-
-        # Determine winner based on current state
-        winner = 0
-        if p0_score > p1_score and p0_tiles > p1_tiles:
-            winner = self.current_player
-        elif p1_score > p0_score and p1_tiles > p0_tiles:
-            winner = 3 - self.current_player
-
-        return winner, moves_played
-
-
-    # Backpropagate the results of the simulation
-    def backpropagate(self, winner, moves_played):
-        """
-        Backpropagate the results of the simulation up the tree, incorporating the number of steps.
-        Args:
-            winner (int): The player who won the simulation (1 or 2).
-            moves_played (list): List of (player, move) pairs played during the simulation.
-            steps (int): Number of steps taken to reach the outcome.
-        """
-        node = self
-        while node is not None:
-            # Increment visits
-            node.visits += 1
-            if node.parent is not None:  # Skip the root node
-                player_who_moved = 3 - node.current_player  # Parent's perspective
-                if player_who_moved == winner:
-                    # Weight wins by the inverse of the number of steps (fewer steps = higher reward)
-                    node.wins += 1
-
-            # Update RAVE statistics
-            for player, move in moves_played:
-                if move is not None:
-                    node.rave_visits[move] = node.rave_visits.get(move, 0) + 1
-                    if player == winner:
-                        node.rave_wins[move] = node.rave_wins.get(move, 0) + 1
-
-            # Move up the tree
-            node.best_child_cache = None
-            node.best_score_cache = None
-            node = node.parent
-
-
-    # Check if the node has children
-    def has_children(self):
-        return len(self.children) > 0
-
-    # Select the best child node based on the UCT/RAVE formula
-    def best_child(self, exploration=np.sqrt(2), k=1):
-
-        best_score = -np.inf
-        best_child = None
-
-        if self.best_child_cache:
-            return self.best_child_cache
-
-        for child in self.children:
-            if child.visits == 0:
-                return child  # Prioritize unexplored nodes
-
-            child_score_cache = child.best_score_cache 
-
-            if child_score_cache and child_score_cache > best_score:
-                best_score = child_score_cache
-                best_child = child
-                continue
-
-            # Calculate beta using the RAVE formula
-            beta_value = beta(self.visits, k)
-
-            # Calculate combined Q* value
-            q_value = child.wins / child.visits
-            rave_wins = child.rave_wins.get(child.move, 0)
-            rave_visits = child.rave_visits.get(child.move, 0)
-            rave_q = rave_wins / rave_visits if rave_visits > 0 else 0
-
-            # Combine Q(s, a) and Q~(s, a) with beta
-            combined_q = (1 - beta_value) * q_value + beta_value * rave_q
-
-            # Add UCT exploration term
-            uct_value = combined_q + exploration * math.sqrt(math.log(self.visits) / child.visits)
-
-            if uct_value > best_score:
-                best_score = uct_value
-                best_child = child
-
-        # Cache the best child and its score
-        self.best_child_cache = best_child
-        self.best_score_cache = best_score
-
-        return best_child
+        return min_eval, best_move
