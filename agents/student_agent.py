@@ -137,7 +137,7 @@ def greedy_flips_score(board, move, player):
     """
     return count_capture(board, move, player)  # Assuming `count_capture` exists
 
-def is_adjacent_to_corner(move, board):
+def is_adjacent_to_corner(board, move):
     """
     Check if a move is adjacent to a corner.
     """
@@ -147,17 +147,28 @@ def is_adjacent_to_corner(move, board):
             return True
     return False
 
+def exposes_corner(board, move, corners, player):
+    """
+    Check if making this move exposes a corner to the opponent.
+    """
+    inner_board = deepcopy(board)
+    execute_move(inner_board, move, player)
+    opponent_moves = get_valid_moves(inner_board, 3 - player)
+    for opp_move in opponent_moves:
+        if opp_move in corners:
+            return True
+    return False
+
 def evaluate_board(board_state):
     """
-    Evaluate the board state relative to an initial board state for better decision-making.
-    
+    Evaluation function that prioritizes positional heuristics in the early and midgame,
+    and maximizes piece count in the final quarter of the game.
+
     Args:
         board_state (np.ndarray): 2D array representing the board state.
-        player (int): The player for whom the evaluation is being done (1 or 2).
-        initial_board_state (np.ndarray, optional): The initial board state for comparison.
-        
+    
     Returns:
-        tuple: (player_score, opponent_score, is_endgame)
+        float: Evaluation score for the current board state.
     """
     rows, cols = board_state.shape
 
@@ -166,16 +177,52 @@ def evaluate_board(board_state):
     if is_endgame:
         return np.inf if p0_score > p1_score else -np.inf
 
+    # Count total and empty spaces
+    total_spaces = rows * cols
+    empty_spaces = np.sum(board_state == 0)
+
     # Define important spots
     corners = get_board_corners(board_state)
     edges = get_board_edges(board_state)
     edges = list(set(edges) - set(corners))  # Remove corners from edges
 
-    # Initialize scores
+    # Piece counts
+    player_pieces = np.sum(board_state == 1)
+    opponent_pieces = np.sum(board_state == 2)
+
+    # Final quarter: Maximize piece count
+    if empty_spaces <= total_spaces / 4:
+        return player_pieces - opponent_pieces  # Maximize piece count directly
+
+    # Early and midgame: Use positional heuristics
     max_score = 0
     min_score = 0
 
-    # Edge and corner considerations
+    # Define directions for edge traversal
+    edge_directions = {
+        (0, 0): [(0, 1), (1, 0)],                       # Top-left corner
+        (0, cols - 1): [(0, -1), (1, 0)],              # Top-right corner
+        (rows - 1, 0): [(0, 1), (-1, 0)],              # Bottom-left corner
+        (rows - 1, cols - 1): [(0, -1), (-1, 0)],      # Bottom-right corner
+    }
+
+    def count_stable_edge_pieces_from_corner(board, corner, player):
+        """
+        Count stable edge pieces emanating from a corner for a specific player.
+        """
+        count = 0
+        for dr, dc in edge_directions[corner]:
+            r, c = corner
+            while 0 <= r < rows and 0 <= c < cols and (r, c) in edges:
+                if board[r, c] == player:
+                    count += 1
+                else:
+                    break
+                r += dr
+                c += dc
+        return count
+
+    # Evaluate positional factors
     for row in range(rows):
         for col in range(cols):
             if board_state[row, col] == 0:
@@ -186,21 +233,19 @@ def evaluate_board(board_state):
 
             # Occupancy of important spots
             if (row, col) in corners:
-                score += 10000
+                score += 500
+                # Add bonus for consecutive edge pieces emanating from this corner
+                score += 15 * count_stable_edge_pieces_from_corner(board_state, (row, col), current_player)
             elif (row, col) in edges:
-                score += 200
+                score += 40
             else:
                 score += 10
 
-
-            # Exposed discs
+            # Stability and risk
             if is_stable(board_state, row, col):
-                score += 7
-
+                score += 25
             if is_at_risk(board_state, row, col):
-                score -= 5
-
-
+                score -= 20
 
             # Add score to the appropriate player
             if current_player == 1:
@@ -208,6 +253,7 @@ def evaluate_board(board_state):
             else:
                 min_score += score
 
+    # Combine positional scores
     return max_score - min_score
 
 
@@ -283,7 +329,7 @@ class MemoryLimitedLRUCache:
             lru_node = self.tail.prev
             if lru_node == self.head:
                 break  # No items left to evict
-            print(f"Evicting key: {lru_node.key}, size: {lru_node.size} bytes")
+            # print(f"Evicting key: {lru_node.key}, size: {lru_node.size} bytes")
             self._remove(lru_node)
             del self.cache[lru_node.key]
             self.current_memory -= lru_node.size
@@ -346,7 +392,7 @@ class MemoryLimitedLRUCache:
         while node != self.tail:
             items.append((node.key, node.value, node.size))
             node = node.next
-        print(f"Cache (Total Memory: {self.current_memory / (1024 * 1024):.2f}/{self.memory_limit / (1024 * 1024):.2f} MB):", items)
+        # print(f"Cache (Total Memory: {self.current_memory / (1024 * 1024):.2f}/{self.memory_limit / (1024 * 1024):.2f} MB):", items)
 
 
 
@@ -370,8 +416,15 @@ class StudentAgent(Agent):
     # Start clock
     start_time = time.time()
 
-    depth = 2
+    depth = 1
     best_move = None
+
+    valid_moves = get_valid_moves(chess_board, player)
+    corners = get_board_corners(chess_board)
+
+    for corner in corners:
+        if corner in valid_moves:
+            return corner
 
     #  Iterative Deepening
     while time.time() - start_time < STEP_TIME_LIMIT and depth <= 100:
@@ -381,21 +434,17 @@ class StudentAgent(Agent):
                 )
                 if move:
                     best_move = move  # Update best move if valid
-                print(best_move)
+                # print(best_move)
                 depth += 1
             except Exception as e:
-                print(f"Error at depth {depth}: {e}")
+                # print(f"Error at depth {depth}: {e}")
                 break
 
         
 
     # Check memory usage
     monitor_memory()
-    
-    print(depth)
-    if best_move == None:
-        input()
-    return best_move
+    return best_move or random_move(chess_board, player)
 
 def minimax_alpha_beta(board, depth, alpha, beta, player, start_time, cache):
     valid_moves = get_valid_moves(board, player)
@@ -403,12 +452,12 @@ def minimax_alpha_beta(board, depth, alpha, beta, player, start_time, cache):
     edges = get_board_edges(board)
 
     valid_moves.sort(key=lambda move: (
-                    0 if move in corners else
-                    1 if move in edges else
-                    2 -
-                    0.5 * greedy_flips_score(board, move, player) -
-                    0.2 * 1 if is_adjacent_to_corner(move, board) else 0
-                ))
+        0 if move in corners else
+        1 if move in edges else
+        2 if exposes_corner(board, move, corners, player) else
+        3 - 0.5 * greedy_flips_score(board, move, player)
+    ))
+
 
 
     # Base case
