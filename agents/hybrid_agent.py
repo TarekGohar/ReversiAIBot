@@ -12,6 +12,8 @@ import os
 
 STEP_TIME_LIMIT = 1.98
 
+# Helper functions
+
 def monitor_memory():
     process = psutil.Process(os.getpid())
     memory_info = process.memory_info()
@@ -20,121 +22,12 @@ def monitor_memory():
 def get_board_corners(board):
     return [(0, 0), (0, board.shape[1] - 1), (board.shape[0] - 1, 0), (board.shape[0] - 1, board.shape[1] - 1)]
 
-# Get the edges of the game board 
 def get_board_edges(board):
     return [(0, i) for i in range(1, board.shape[1] - 1)] + \
                 [(board.shape[0] - 1, i) for i in range(1, board.shape[1] - 1)] + \
                 [(i, 0) for i in range(1, board.shape[0] - 1)] + \
                 [(i, board.shape[1] - 1) for i in range(1, board.shape[0] - 1)]
 
-def monitor_memory():
-    process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
-    memory_mb = memory_info.rss / (1024 * 1024)
-    print(f"Memory Usage: {memory_info.rss / (1024 * 1024):.2f} MB")
-
-def is_stable(board, row, col):
-    """
-    Check if the piece at (row, col) is stable in a Reversi game.
-    
-    Args:
-        board (np.array): 2D array representing the Reversi board. 
-                          0 for empty, 1 for black, -1 for white.
-        row (int): Row index of the piece to check.
-        col (int): Column index of the piece to check.
-
-    Returns:
-        bool: True if the piece is stable, False otherwise.
-    """
-    # Directions to check (horizontal, vertical, diagonal)
-    directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
-    piece = board[row, col]
-    
-    # An empty cell or invalid index cannot be stable
-    if piece == 0:
-        return False
-    
-    rows, cols = board.shape
-    
-    def is_edge_or_corner(r, c):
-        """Check if a position is on the edge or corner."""
-        return r in {0, rows - 1} or c in {0, cols - 1}
-    
-    # Pieces on corners are always stable
-    if is_edge_or_corner(row, col):
-        return True
-    
-    def direction_stable(r, c, dr, dc):
-        """
-        Check stability in one direction (dr, dc).
-        """
-        stable = True
-        while 0 <= r < rows and 0 <= c < cols:
-            if board[r, c] != piece and board[r, c] != 0:
-                stable = False
-                break
-            r += dr
-            c += dc
-        return stable
-    
-    # Check stability in all directions
-    for dr, dc in directions:
-        if not direction_stable(row + dr, col + dc, dr, dc):
-            return False
-
-    return True
-
-def is_at_risk(board, row, col):
-    """
-    Check if the piece at (row, col) is at risk of being flipped in a Reversi game.
-    
-    Args:
-        board (np.array): 2D array representing the Reversi board.
-                          0 for empty, 1 for black, -1 for white.
-        row (int): Row index of the piece to check.
-        col (int): Column index of the piece to check.
-
-    Returns:
-        bool: True if the piece is at risk, False otherwise.
-    """
-    # Directions to check (horizontal, vertical, diagonal)
-    directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
-    piece = board[row, col]
-    
-    # An empty cell or invalid index cannot be at risk
-    if piece == 0:
-        return False
-    
-    opponent = -piece
-    rows, cols = board.shape
-    
-    def can_flip_in_direction(r, c, dr, dc):
-        """
-        Check if the piece can be flipped in one direction (dr, dc).
-        """
-        r += dr
-        c += dc
-        has_opponent_pieces = False
-        
-        while 0 <= r < rows and 0 <= c < cols:
-            if board[r, c] == opponent:
-                has_opponent_pieces = True  # Found opponent's piece
-            elif board[r, c] == piece:
-                return has_opponent_pieces  # Stable sequence ends with player's piece
-            else:
-                break  # Reached an empty square or the edge
-            r += dr
-            c += dc
-        
-        return False  # No valid flip found in this direction
-    
-    # Check all directions
-    for dr, dc in directions:
-        if can_flip_in_direction(row, col, dr, dc):
-            return True
-
-    return False
-
 def greedy_flips_score(board, move, player):
     """
     Compute a score based on the number of discs flipped by the move.
@@ -258,16 +151,6 @@ def greedy_flips_score(board, move, player):
     Compute a score based on the number of discs flipped by the move.
     """
     return count_capture(board, move, player)  # Assuming `count_capture` exists
-
-def is_adjacent_to_corner(board, move):
-    """
-    Check if a move is adjacent to a corner.
-    """
-    corners = get_board_corners(board)
-    for corner in corners:
-        if abs(corner[0] - move[0]) <= 1 and abs(corner[1] - move[1]) <= 1:
-            return True
-    return False
 
 def exposes_corner(board, move, corners, player):
     """
@@ -280,6 +163,9 @@ def exposes_corner(board, move, corners, player):
         if opp_move in corners:
             return True
     return False
+
+
+# Main functions for MiniMax
 
 def evaluate_board(board_state):
     """
@@ -320,29 +206,7 @@ def evaluate_board(board_state):
     max_score = 0
     min_score = 0
 
-    # Define directions for edge traversal
-    edge_directions = {
-        (0, 0): [(0, 1), (1, 0)],                       # Top-left corner
-        (0, cols - 1): [(0, -1), (1, 0)],              # Top-right corner
-        (rows - 1, 0): [(0, 1), (-1, 0)],              # Bottom-left corner
-        (rows - 1, cols - 1): [(0, -1), (-1, 0)],      # Bottom-right corner
-    }
-
-    def count_stable_edge_pieces_from_corner(board, corner, player):
-        """
-        Count stable edge pieces emanating from a corner for a specific player.
-        """
-        count = 0
-        for dr, dc in edge_directions[corner]:
-            r, c = corner
-            while 0 <= r < rows and 0 <= c < cols and (r, c) in edges:
-                if board[r, c] == player:
-                    count += 1
-                else:
-                    break
-                r += dr
-                c += dc
-        return count
+    
 
     # Evaluate positional factors
     for row in range(rows):
@@ -356,8 +220,6 @@ def evaluate_board(board_state):
             # Occupancy of important spots
             if (row, col) in corners:
                 score += 500
-                # Add bonus for consecutive edge pieces emanating from this corner
-                score += 15 * count_stable_edge_pieces_from_corner(board_state, (row, col), current_player)
             elif (row, col) in edges:
                 score += 40
             else:
@@ -520,7 +382,7 @@ class MCTSNode:
         self.rave_visits = {} # Number of RAVE visits for each move
         self.rave_wins = {} # Number of RAVE wins for each move
 
-    def evaluate_board(self, board, color, player_score, opponent_score):
+    def evaluate_board(self, board, player, player_score, opponent_score):
         """
         Evaluate the board state based on multiple factors.
 
@@ -533,166 +395,205 @@ class MCTSNode:
         Returns:
         - int: The evaluated score of the board.
         """
-        # Corner positions are highly valuable
-        corners = [(0, 0), (0, board.shape[1] - 1), (board.shape[0] - 1, 0), (board.shape[0] - 1, board.shape[1] - 1)]
-        corner_score = sum(1 for corner in corners if board[corner] == color) * 10
-        corner_penalty = sum(1 for corner in corners if board[corner] == 3 - color) * 10
+        # Value the corner moves
+        corners = get_board_corners(board)
+        corner_score = sum(1 for corner in corners if board[corner] == player) * 10
+        corner_penalty = sum(1 for corner in corners if board[corner] == 3 - player) * 10
 
-        # Mobility: the number of moves the opponent can make
-        opponent_moves = len(get_valid_moves(board, 3 - color))
-        mobility_score = opponent_moves
+        # Valuye the number of moves the opponent can make
+        opponent_moves = len(get_valid_moves(board, 3 - player))
 
-        # Combine scores
-        total_score = player_score - opponent_score + corner_score - corner_penalty - mobility_score
-        return total_score
+        # Return combined scores
+        return player_score - opponent_score + corner_score - corner_penalty - opponent_moves
 
     def mcts_search(self, player, start_time, time_limit=1.9):
-      start_time = time.time()
-      iteration = 0
-      while time.time() - start_time < time_limit:
-          node = self
-          # Selection
-          is_endgame, _, _ = check_endgame(node.board_state, player, player%2 +1)
-          while node.is_fully_expanded() and not is_endgame:
-              node = node.best_child()
-          # Expansion
-          if not is_endgame:
-              node.expand()
-              if len(node.children) > 0:
-                  node = node.children[0]
-          # Simulation
-          winner, moves_played = node.rollout()
-          # Backpropagation
-          node.backpropagate(winner, moves_played)
-      # Return the move with the most visits
-      if self.children:
-          best_move = max(self.children, key=lambda c: c.visits).move
-      else:
-          # If no children were expanded, return a random valid move
-          valid_moves = get_valid_moves(self.board_state, player)
-          if valid_moves:
-              best_move = self.choice(valid_moves)
-          else:
-              best_move = None  # No valid moves, must pass
-      return best_move
-
-
-    def expand(self):
-      if not self.children:
-        moves = get_valid_moves(self.board_state, self.current_player)
-        if not moves:
-            # No valid moves, so the player must pass
-            moves = [None]  # Represent pass move with None
 
         corners = get_board_corners(self.board_state)
         edges = get_board_edges(self.board_state)
+      
+        while time.time() - start_time < time_limit:
+            # set node equal to root
+            node = self
 
-        moves.sort(key=lambda move: (
-            0 if move in corners else
-            1 if move in edges else
-            2
-        ))
-        for move in moves:
-            new_board = deepcopy(self.board_state)
-            if move is not None:
-                execute_move(new_board, move, self.current_player)
-            # Switch to the next player
-            next_player = 3 - self.current_player
-            child_node = MCTSNode(new_board, next_player, parent=self, move=move)
-            self.children.append(child_node)
+            # check for endgame
+            is_endgame, _, _ = check_endgame(node.board_state, player, 3 - player)
 
+            # Selection
+            while node.has_children() and not is_endgame:
+                # keep finding best candidate until leaf node reached
+                node = node.best_child()
 
-    def is_fully_expanded(self):
+            # Expansion
+            if not is_endgame:
+                node.expand(corners, edges)
+
+                if len(node.children) > 0:
+                    # pick first child since ordered by importance
+                    node = node.children[0]
+
+            # Simulation
+            winner, moves_played = node.rollout()
+
+            # Backpropagation
+            node.backpropagate(winner, moves_played)
+
+        # Return the move with the most visits as per MCTS
+        if self.children:
+            best_move = max(self.children, key=lambda c: c.visits).move
+        else:
+            # If no children were expanded, return a random valid move
+            best_move = random_move(self.board_state, player)
+        return best_move
+
+    def expand(self, corners, edges):
+        # verify no children
+        if not self.children:
+            valid_moves = get_valid_moves(self.board_state, self.current_player)
+
+            if not valid_moves:
+                # No valid moves, so the player must pass
+                valid_moves = [None]  # Represent pass move with None
+
+            # order by importance
+            valid_moves.sort(key=lambda move: (
+                0 if move in corners else
+                1 if move in edges else
+                2
+            ))
+
+            for move in valid_moves:
+                # create new board state per move
+                new_board = deepcopy(self.board_state)
+
+                if move is not None:
+                    execute_move(new_board, move, self.current_player)
+
+                # Switch to the next player
+                next_player = 3 - self.current_player
+
+                # create and add node
+                child_node = MCTSNode(new_board, next_player, parent=self, move=move)
+                self.children.append(child_node)
+
+    def has_children(self):
         return len(self.children) > 0
 
     def best_child(self, exploration=1.41):
-      best_score = -np.inf
-      best_child = None
-      for child in self.children:
-          if child.visits == 0:
-              return child
-          rave_visit = child.rave_visits.get(child.move, 0)
-          beta = rave_visit / (rave_visit + child.visits + 1e-4)
-          q_value = child.wins / child.visits
-          rave_win = child.rave_wins.get(child.move, 0)
-          rave_q = rave_win / rave_visit if rave_visit > 0 else 0
-          uct_value = (1 - beta) * q_value + beta * rave_q + exploration * math.sqrt(math.log(self.visits) / child.visits)
-          if uct_value > best_score:
-              best_score = uct_value
-              best_child = child
-      return best_child
+        best_score = -np.inf
+        best_child = None
 
+        for child in self.children:
+            # return unvisited nodes first
+            if child.visits == 0:
+                return child
+            
+            # RAVE stats
+            rave_visit = child.rave_visits.get(child.move, 0)
+            rave_win = child.rave_wins.get(child.move, 0)
+            rave_q = rave_win / rave_visit if rave_visit > 0 else 0
+
+            # beta for balance between exploitation and exploration
+            beta = rave_visit / (rave_visit + child.visits + 1e-4)
+
+            q_value = child.wins / child.visits
+            
+            # MC-RAVE + UCT equation
+            uct_value = (1 - beta) * q_value + beta * rave_q + exploration * math.sqrt(math.log(self.visits) / child.visits)
+
+            if uct_value > best_score:
+                best_score = uct_value
+                best_child = child
+
+        return best_child
 
     def rollout_policy(self, board_state, player):
-        legal_moves = get_valid_moves(board_state, player)
+        valid_moves = get_valid_moves(board_state, player)
 
-        if not legal_moves:
-            return None  # No valid moves available, pass turn
+        if not valid_moves:
+            return None  # No valid moves available then pass turn
 
-        # Advanced heuristic: prioritize corners and maximize flips while minimizing opponent's potential moves
         best_move = None
         best_score = float('-inf')
 
-        for move in legal_moves:
+        # Prioritize corners, maximize flips and minimize opponent potential moves
+        for move in valid_moves:
             simulated_board = deepcopy(board_state)
             execute_move(simulated_board, move, player)
-            _, player_score, opponent_score = check_endgame(simulated_board, player, 3 - player)
+
+            # get scores
+            player_score = np.count_nonzero(simulated_board == player)
+            opponent_score = np.count_nonzero(simulated_board == 3 - player)
+
+            # get overall state score
             move_score = self.evaluate_board(simulated_board, player, player_score, opponent_score)
 
+            # keep best scored move
             if move_score > best_score:
                 best_score = move_score
                 best_move = move
 
         # Return the best move found
-        return best_move if best_move else np.random.choice(legal_moves)
+        return best_move if best_move else np.random.choice(valid_moves)
 
     def rollout(self):
-      current_state = deepcopy(self.board_state)
-      moves_played = []
-      player = self.current_player
-      opponent = 3 - self.current_player
+        # create copy of state to simulate on
+        current_state = deepcopy(self.board_state)
 
-      is_endgame, p0_score, p1_score = check_endgame(current_state, player, opponent)
-      consecutive_passes = 0  # Counter for consecutive passes
+        # list of moves made during simulation
+        moves_played = []
 
-      while not is_endgame:
-          move = self.rollout_policy(current_state, player)
-          moves_played.append((player, move))
+        # current player
+        player = self.current_player
 
-          if move is not None:
-              execute_move(current_state, move, player)
-              consecutive_passes = 0  # Reset pass counter
-          else:
-              consecutive_passes += 1
+        # current opponent
+        opponent = 3 - self.current_player
 
-          # Check for endgame condition: two consecutive passes
-          if consecutive_passes >= 2:
-              break  # End the game
+        # check for terminal state
+        is_endgame, p0_score, p1_score = check_endgame(current_state, self.current_player, 3 - self.current_player)
+        stalemate_counter = 0  # flag for stalemate
 
-          # Swap players
-          player, opponent = opponent, player
-          is_endgame, p0_score, p1_score = check_endgame(current_state, player, opponent)
+        while not is_endgame:
+            move = self.rollout_policy(current_state, player)
+            moves_played.append((player, move))
 
-      # Determine the winner
-      winner = 1 if p0_score > p1_score else 2
-      return winner, moves_played
+            if move is not None:
+                execute_move(current_state, move, player)
+                stalemate_counter = 0  # Reset counter
+            else:
+                stalemate_counter += 1
 
+            # Check for stalemate when both sides cannot move
+            if stalemate_counter >= 2:
+                break  # End the game
+
+            # Swap players
+            player, opponent = opponent, player
+            
+            # check for endgame
+            is_endgame, p0_score, p1_score = check_endgame(current_state, self.current_player, 3 - self.current_player)
+
+        # Determine the winner, ties and losses count as losses
+        winner = self.current_player if p0_score > p1_score else 3 - self.current_player
+        return winner, moves_played
 
     def backpropagate(self, winner, moves_played):
-      node = self
-      while node is not None:
-          node.visits += 1
-          # The player who made the move leading to this node is the opponent of node.current_player
-          player_who_moved = 1 if node.current_player == 2 else 2
-          if player_who_moved == winner:
-              node.wins += 1
-          # Update RAVE statistics
-          for player, move in moves_played:
-              if move is not None:
-                  node.rave_visits[move] = node.rave_visits.get(move, 0) + 1
-                  if player == player_who_moved and player == winner:
-                      node.rave_wins[move] = node.rave_wins.get(move, 0) + 1
-          node = node.parent
+        node = self
+        while node is not None:
+            node.visits += 1
+
+            # The player who made the move leading to this node is the opponent of node.current_player
+            player_who_moved = 1 if node.current_player == 2 else 2
+
+            if player_who_moved == winner:
+                node.wins += 1
+
+            # Update RAVE statistics
+            for player, move in moves_played:
+                if move is not None:
+                    node.rave_visits[move] = node.rave_visits.get(move, 0) + 1
+                    if player == player_who_moved and player == winner:
+                        node.rave_wins[move] = node.rave_wins.get(move, 0) + 1
+            node = node.parent
 
 # MinMax Node Class
 class MinMaxNode:
