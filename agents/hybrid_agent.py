@@ -1,4 +1,3 @@
-# Student agent: Add your own agent here
 from agents.agent import Agent
 from store import register_agent
 import sys
@@ -28,22 +27,6 @@ def get_board_edges(board):
                 [(i, 0) for i in range(1, board.shape[0] - 1)] + \
                 [(i, board.shape[1] - 1) for i in range(1, board.shape[0] - 1)]
 
-def greedy_flips_score(board, move, player):
-    """
-    Compute a score based on the number of discs flipped by the move.
-    """
-    return count_capture(board, move, player)  # Assuming `count_capture` exists
-
-def is_adjacent_to_corner(board, move):
-    """
-    Check if a move is adjacent to a corner.
-    """
-    corners = get_board_corners(board)
-    for corner in corners:
-        if abs(corner[0] - move[0]) <= 1 and abs(corner[1] - move[1]) <= 1:
-            return True
-    return False
-
 def is_stable(board, row, col):
     """
     Check if the piece at (row, col) is stable in a Reversi game.
@@ -61,7 +44,7 @@ def is_stable(board, row, col):
     directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
     piece = board[row, col]
     
-    # An empty cell or invalid index cannot be stable
+    # Ignore empty spots
     if piece == 0:
         return False
     
@@ -71,7 +54,7 @@ def is_stable(board, row, col):
         """Check if a position is on the edge or corner."""
         return r in {0, rows - 1} or c in {0, cols - 1}
     
-    # Pieces on corners are always stable
+    # Pieces on corners and edges are always stable
     if is_edge_or_corner(row, col):
         return True
     
@@ -145,12 +128,6 @@ def is_at_risk(board, row, col):
             return True
 
     return False
-
-def greedy_flips_score(board, move, player):
-    """
-    Compute a score based on the number of discs flipped by the move.
-    """
-    return count_capture(board, move, player)  # Assuming `count_capture` exists
 
 def exposes_corner(board, move, corners, player):
     """
@@ -248,8 +225,7 @@ def minimax_alpha_beta(board, depth, alpha, beta, player, start_time, cache):
     valid_moves.sort(key=lambda move: (
         0 if move in corners else
         1 if move in edges else
-        2 if exposes_corner(board, move, corners, player) else
-        3 - 0.5 * greedy_flips_score(board, move, player)
+        2 if exposes_corner(board, move, corners, player) else 3
     ))
 
 
@@ -317,21 +293,21 @@ def determine_algorithm(board_state):
 
     game_left = empty_spots/total_spots
 
-    if game_left > .85 and (board_size == 10 or board_size == 12):
+    if game_left > .80:
         return "IDMM"
     else:
         return "MCTS"
 
-@register_agent("hybrid_agent")
-class HybridAgent(Agent):
+@register_agent("student_agent")
+class StudentAgent(Agent):
   """
   A class for your implementation. Feel free to use this class to
   add any helper functionalities needed for your agent.
   """
 
   def __init__(self):
-    super(HybridAgent, self).__init__()
-    self.name = "HybridAgent"
+    super(StudentAgent, self).__init__()
+    self.name = "StudentAgent"
     self.cache = MemoryLimitedLRUCache(400)
 
   def step(self, chess_board, player, opponent):
@@ -354,11 +330,12 @@ class HybridAgent(Agent):
         if corner in valid_moves:
             return corner
 
-    while time.time() - start_time < STEP_TIME_LIMIT:
-        if algorithm == "MCTS":
-            node = MCTSNode(chess_board, player)
-            best_move = node.mcts_search(player, start_time, STEP_TIME_LIMIT)
-        else:
+    
+    if algorithm == "MCTS":
+        node = MCTSNode(chess_board, player)
+        best_move = node.mcts_search(player, start_time, STEP_TIME_LIMIT)
+    else:
+        while time.time() - start_time < STEP_TIME_LIMIT:
             _, move = minimax_alpha_beta(
                         chess_board, depth, -np.inf, np.inf, player, start_time, self.cache
                     )
@@ -521,8 +498,7 @@ class MCTSNode:
             execute_move(simulated_board, move, player)
 
             # get scores
-            player_score = np.count_nonzero(simulated_board == player)
-            opponent_score = np.count_nonzero(simulated_board == 3 - player)
+            _, player_score, opponent_score = check_endgame(simulated_board, player, 3 - player)
 
             # get overall state score
             move_score = self.evaluate_board(simulated_board, player, player_score, opponent_score)
@@ -573,7 +549,7 @@ class MCTSNode:
             is_endgame, p0_score, p1_score = check_endgame(current_state, self.current_player, 3 - self.current_player)
 
         # Determine the winner, ties and losses count as losses
-        winner = self.current_player if p0_score > p1_score else 3 - self.current_player
+        winner = 1 if p0_score > p1_score else 2
         return winner, moves_played
 
     def backpropagate(self, winner, moves_played):
@@ -595,7 +571,7 @@ class MCTSNode:
                         node.rave_wins[move] = node.rave_wins.get(move, 0) + 1
             node = node.parent
 
-# MinMax Node Class
+# MinMax Node Class for caching
 class MinMaxNode:
     def __init__(self, key, value, size):
         self.key = key
@@ -606,14 +582,14 @@ class MinMaxNode:
 
 # Class to handle IDS caching
 class MemoryLimitedLRUCache:
-    def __init__(self, memory_limit_mb):
+    def __init__(self, memory_limit):
         """
-        Initialize the cache with a memory limit specified in megabytes (MB).
+        Initialize the cache with a memory limit specified in megabytes.
         
         Args:
             memory_limit_mb (int): Maximum memory in megabytes for the cache.
         """
-        self.memory_limit = memory_limit_mb * 1024 * 1024  # Convert MB to bytes
+        self.memory_limit = memory_limit * 1024 * 1024  # Convert MB to bytes
         self.current_memory = 0
         self.cache = {}
         self.head = MinMaxNode(0, 0, 0)  # Dummy head
@@ -720,15 +696,3 @@ class MemoryLimitedLRUCache:
 
         # Evict items if over memory limit
         self._evict()
-
-    def display(self):
-        """
-        Display the current state of the cache.
-        """
-        node = self.head.next
-        items = []
-        while node != self.tail:
-            items.append((node.key, node.value, node.size))
-            node = node.next
-        # print(f"Cache (Total Memory: {self.current_memory / (1024 * 1024):.2f}/{self.memory_limit / (1024 * 1024):.2f} MB):", items)
-

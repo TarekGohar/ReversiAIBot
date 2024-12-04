@@ -90,12 +90,11 @@ class MCTSNode:
 
     def mcts_search(self, root_state, player, time_limit=1.9):
       start_time = time.time()
-      root_node = MCTSNode(root_state, player)
       iteration = 0
       while time.time() - start_time < time_limit:
-          node = root_node
+          node = self
           # Selection
-          is_endgame, _, _ = check_endgame(node.board_state, player, player%2 +1)
+          is_endgame, _, _ = check_endgame(node.board_state, player, 3 - player)
           while node.is_fully_expanded() and not is_endgame:
               node = node.best_child()
           # Expansion
@@ -108,8 +107,8 @@ class MCTSNode:
           # Backpropagation
           node.backpropagate(winner, moves_played)
       # Return the move with the most visits
-      if root_node.children:
-          best_move = max(root_node.children, key=lambda c: c.visits).move
+      if self.children:
+          best_move = max(self.children, key=lambda c: c.visits).move
       else:
           # If no children were expanded, return a random valid move
           valid_moves = get_valid_moves(root_state, player)
